@@ -8,6 +8,7 @@ import android.text.TextUtils;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 
 import com.annimon.stream.Collectors;
 import com.annimon.stream.Stream;
@@ -15,6 +16,7 @@ import com.google.protobuf.ByteString;
 import com.mobilecoin.lib.exceptions.SerializationException;
 
 import org.signal.core.util.Hex;
+import org.signal.core.util.concurrent.SignalExecutors;
 import org.signal.core.util.logging.Log;
 import org.signal.libsignal.protocol.IdentityKey;
 import org.signal.libsignal.protocol.IdentityKeyPair;
@@ -216,24 +218,19 @@ import java.util.concurrent.TimeUnit;
  * data to our data stores.
  */
 @SuppressWarnings({ "OptionalGetWithoutIsPresent", "OptionalIsPresent" })
-public final class MessageContentProcessor {
+public class MessageContentProcessor {
 
   private static final String TAG = Log.tag(MessageContentProcessor.class);
 
   private final Context context;
-  private final boolean processingEarlyContent;
 
-  public static MessageContentProcessor forNormalContent(@NonNull Context context) {
-    return new MessageContentProcessor(context, false);
+  public static MessageContentProcessor create(@NonNull Context context) {
+    return new MessageContentProcessor(context);
   }
 
-  public static MessageContentProcessor forEarlyContent(@NonNull Context context) {
-    return new MessageContentProcessor(context, true);
-  }
-
-  private MessageContentProcessor(@NonNull Context context, boolean processingEarlyContent) {
-    this.context                = context;
-    this.processingEarlyContent = processingEarlyContent;
+  @VisibleForTesting
+  MessageContentProcessor(@NonNull Context context) {
+    this.context = context;
   }
 
   /**
@@ -243,7 +240,24 @@ public final class MessageContentProcessor {
    * This is super-stateful, and it's recommended that this be run in a transaction so that no
    * intermediate results are persisted to the database if the app were to crash.
    */
-  public void process(MessageState messageState, @Nullable SignalServiceContent content, @Nullable ExceptionMetadata exceptionMetadata, long timestamp, long smsMessageId)
+  public void process(MessageState messageState, @Nullable SignalServiceContent content, @Nullable ExceptionMetadata exceptionMetadata, long envelopeTimestamp, long smsMessageId)
+      throws IOException, GroupChangeBusyException
+  {
+    process(messageState, content, exceptionMetadata, envelopeTimestamp, smsMessageId, false);
+  }
+
+  /**
+   * The same as {@link #process(MessageState, SignalServiceContent, ExceptionMetadata, long, long)}, except specifically targeted at early content.
+   * Using this method will *not* store or enqueue early content jobs if we detect this as being early, to avoid recursive scenarios.
+   */
+  public void processEarlyContent(MessageState messageState, @Nullable SignalServiceContent content, @Nullable ExceptionMetadata exceptionMetadata, long envelopeTimestamp, long smsMessageId)
+      throws IOException, GroupChangeBusyException
+  {
+    process(messageState, content, exceptionMetadata, envelopeTimestamp, smsMessageId, true);
+  }
+
+
+  private void process(MessageState messageState, @Nullable SignalServiceContent content, @Nullable ExceptionMetadata exceptionMetadata, long envelopeTimestamp, long smsMessageId, boolean processingEarlyContent)
       throws IOException, GroupChangeBusyException
   {
     Optional<Long> optionalSmsMessageId = smsMessageId > 0 ? Optional.of(smsMessageId) : Optional.empty();
@@ -253,22 +267,22 @@ public final class MessageContentProcessor {
       if (content != null) {
         Recipient senderRecipient = Recipient.externalPush(content.getSender());
 
-        handleMessage(content, timestamp, senderRecipient, optionalSmsMessageId);
+        handleMessage(content, senderRecipient, optionalSmsMessageId, processingEarlyContent);
 
         Optional<List<SignalServiceContent>> earlyContent = ApplicationDependencies.getEarlyMessageCache()
                                                                                    .retrieve(senderRecipient.getId(), content.getTimestamp());
-        if (earlyContent.isPresent()) {
+        if (!processingEarlyContent && earlyContent.isPresent()) {
           log(String.valueOf(content.getTimestamp()), "Found " + earlyContent.get().size() + " dependent item(s) that were retrieved earlier. Processing.");
 
           for (SignalServiceContent earlyItem : earlyContent.get()) {
-            handleMessage(earlyItem, timestamp, senderRecipient, Optional.empty());
+            handleMessage(earlyItem, senderRecipient, Optional.empty(), true);
           }
         }
       } else {
         warn("null", "Null content. Ignoring message.");
       }
     } else if (exceptionMetadata != null) {
-      handleExceptionMessage(messageState, exceptionMetadata, timestamp, optionalSmsMessageId);
+      handleExceptionMessage(messageState, exceptionMetadata, envelopeTimestamp, optionalSmsMessageId);
     } else if (messageState == MessageState.NOOP) {
       Log.d(TAG, "Nothing to do: " + messageState.name());
     } else {
@@ -276,11 +290,11 @@ public final class MessageContentProcessor {
     }
   }
 
-  private void handleMessage(@NonNull SignalServiceContent content, long timestamp, @NonNull Recipient senderRecipient, @NonNull Optional<Long> smsMessageId)
+  private void handleMessage(@NonNull SignalServiceContent content, @NonNull Recipient senderRecipient, @NonNull Optional<Long> smsMessageId, boolean processingEarlyContent)
       throws IOException, GroupChangeBusyException
   {
     try {
-      Recipient threadRecipient = getMessageDestination(content);
+      Recipient threadRecipient = getMessageDestination(content, senderRecipient);
 
       if (shouldIgnore(content, senderRecipient, threadRecipient)) {
         log(content.getTimestamp(), "Ignoring message.");
@@ -311,8 +325,8 @@ public final class MessageContentProcessor {
         else if (message.isEndSession())                                                     messageId = handleEndSessionMessage(content, smsMessageId, senderRecipient);
         else if (message.isExpirationUpdate())                                               messageId = handleExpirationUpdate(content, message, smsMessageId, groupId, senderRecipient, threadRecipient, receivedTime, false);
         else if (message.getReaction().isPresent() && message.getStoryContext().isPresent()) messageId = handleStoryReaction(content, message, senderRecipient);
-        else if (message.getReaction().isPresent())                                          messageId = handleReaction(content, message, senderRecipient);
-        else if (message.getRemoteDelete().isPresent())                                      messageId = handleRemoteDelete(content, message, senderRecipient);
+        else if (message.getReaction().isPresent())                                          messageId = handleReaction(content, message, senderRecipient, processingEarlyContent);
+        else if (message.getRemoteDelete().isPresent())                                      messageId = handleRemoteDelete(content, message, senderRecipient, processingEarlyContent);
         else if (message.isActivatePaymentsRequest())                                        messageId = handlePaymentActivation(content, message, smsMessageId, senderRecipient, receivedTime, true, false);
         else if (message.isPaymentsActivated())                                              messageId = handlePaymentActivation(content, message, smsMessageId, senderRecipient, receivedTime, false, true);
         else if (message.getPayment().isPresent())                                           messageId = handlePayment(content, message, smsMessageId, senderRecipient, receivedTime);
@@ -331,7 +345,7 @@ public final class MessageContentProcessor {
         }
 
         if (content.isNeedsReceipt() && messageId != null) {
-          handleNeedsDeliveryReceipt(content, message, messageId);
+          handleNeedsDeliveryReceipt(senderRecipient.getId(), message, messageId);
         } else if (!content.isNeedsReceipt()) {
           if (RecipientUtil.shouldHaveProfileKey(threadRecipient)) {
             Log.w(TAG, "Received an unsealed sender message from " + senderRecipient.getId() + ", but they should already have our profile key. Correcting.");
@@ -359,11 +373,11 @@ public final class MessageContentProcessor {
 
         SignalServiceSyncMessage syncMessage = content.getSyncMessage().get();
 
-        if      (syncMessage.getSent().isPresent())                   handleSynchronizeSentMessage(content, syncMessage.getSent().get(), senderRecipient);
+        if      (syncMessage.getSent().isPresent())                   handleSynchronizeSentMessage(content, syncMessage.getSent().get(), senderRecipient, processingEarlyContent);
         else if (syncMessage.getRequest().isPresent())                handleSynchronizeRequestMessage(syncMessage.getRequest().get(), content.getTimestamp());
-        else if (syncMessage.getRead().isPresent())                   handleSynchronizeReadMessage(content, syncMessage.getRead().get(), content.getTimestamp());
+        else if (syncMessage.getRead().isPresent())                   handleSynchronizeReadMessage(content, syncMessage.getRead().get(), content.getTimestamp(), processingEarlyContent);
         else if (syncMessage.getViewed().isPresent())                 handleSynchronizeViewedMessage(syncMessage.getViewed().get(), content.getTimestamp());
-        else if (syncMessage.getViewOnceOpen().isPresent())           handleSynchronizeViewOnceOpenMessage(content, syncMessage.getViewOnceOpen().get(), content.getTimestamp());
+        else if (syncMessage.getViewOnceOpen().isPresent())           handleSynchronizeViewOnceOpenMessage(content, syncMessage.getViewOnceOpen().get(), content.getTimestamp(), processingEarlyContent);
         else if (syncMessage.getVerified().isPresent())               handleSynchronizeVerifiedMessage(syncMessage.getVerified().get());
         else if (syncMessage.getStickerPackOperations().isPresent())  handleSynchronizeStickerPackOperation(syncMessage.getStickerPackOperations().get(), content.getTimestamp());
         else if (syncMessage.getConfiguration().isPresent())          handleSynchronizeConfigurationMessage(syncMessage.getConfiguration().get(), content.getTimestamp());
@@ -397,9 +411,9 @@ public final class MessageContentProcessor {
       } else if (content.getReceiptMessage().isPresent()) {
         SignalServiceReceiptMessage message = content.getReceiptMessage().get();
 
-        if      (message.isReadReceipt())     handleReadReceipt(content, message, senderRecipient);
+        if      (message.isReadReceipt())     handleReadReceipt(content, message, senderRecipient, processingEarlyContent);
         else if (message.isDeliveryReceipt()) handleDeliveryReceipt(content, message, senderRecipient);
-        else if (message.isViewedReceipt())   handleViewedReceipt(content, message, senderRecipient);
+        else if (message.isViewedReceipt())   handleViewedReceipt(content, message, senderRecipient, processingEarlyContent);
       } else if (content.getTypingMessage().isPresent()) {
         handleTypingMessage(content, content.getTypingMessage().get(), senderRecipient);
       } else if (content.getStoryMessage().isPresent()) {
@@ -422,7 +436,7 @@ public final class MessageContentProcessor {
       }
     } catch (StorageFailedException e) {
       warn(String.valueOf(content.getTimestamp()), e);
-      handleCorruptMessage(e.getSender(), e.getSenderDevice(), timestamp, smsMessageId);
+      handleCorruptMessage(e.getSender(), e.getSenderDevice(), content.getTimestamp(), smsMessageId);
     } catch (BadGroupIdException e) {
       warn(String.valueOf(content.getTimestamp()), "Ignoring message with bad group id", e);
     }
@@ -595,6 +609,11 @@ public final class MessageContentProcessor {
     }
 
     switch (messageState) {
+      case DECRYPTION_ERROR:
+        warn(String.valueOf(timestamp), "Handling encryption error.");
+        SignalDatabase.messages().insertBadDecryptMessage(sender.getId(), e.senderDevice, timestamp, System.currentTimeMillis(), getThreadIdForException(e));
+        break;
+
       case INVALID_VERSION:
         warn(String.valueOf(timestamp), "Handling invalid version.");
         handleInvalidVersionMessage(e.sender, e.senderDevice, timestamp, smsMessageId);
@@ -622,6 +641,15 @@ public final class MessageContentProcessor {
 
       default:
         throw new AssertionError("Not handled " + messageState + ". (" + timestamp + ")");
+    }
+  }
+
+  private long getThreadIdForException(ExceptionMetadata metadata) {
+    if (metadata.groupId != null) {
+      Recipient groupRecipient = Recipient.externalPossiblyMigratedGroup(metadata.groupId);
+      return SignalDatabase.threads().getOrCreateThreadIdFor(groupRecipient);
+    } else {
+      return SignalDatabase.threads().getOrCreateThreadIdFor(Recipient.external(context, metadata.sender));
     }
   }
 
@@ -834,7 +862,7 @@ public final class MessageContentProcessor {
       warn(content.getTimestamp(), "Group message missing destination uuid, defaulting to ACI");
       authServiceId = SignalStore.account().requireAci();
     }
-    SignalDatabase.groups().fixMissingMasterKey(authServiceId, group.getMasterKey());
+    SignalDatabase.groups().fixMissingMasterKey(group.getMasterKey());
   }
 
   /**
@@ -923,7 +951,7 @@ public final class MessageContentProcessor {
                                                      boolean sideEffect)
       throws StorageFailedException
   {
-    log(content.getTimestamp(), "Expiration update.");
+    log(content.getTimestamp(), "Expiration update. Side effect: " + sideEffect);
 
     if (groupId.isPresent() && groupId.get().isV2()) {
       warn(String.valueOf(content.getTimestamp()), "Expiration update received for GV2. Ignoring.");
@@ -983,7 +1011,7 @@ public final class MessageContentProcessor {
     return null;
   }
 
-  private @Nullable MessageId handleReaction(@NonNull SignalServiceContent content, @NonNull SignalServiceDataMessage message, @NonNull Recipient senderRecipient) throws StorageFailedException {
+  private @Nullable MessageId handleReaction(@NonNull SignalServiceContent content, @NonNull SignalServiceDataMessage message, @NonNull Recipient senderRecipient, boolean processingEarlyContent) throws StorageFailedException {
     log(content.getTimestamp(), "Handle reaction for message " + message.getReaction().get().getTargetSentTimestamp());
 
     SignalServiceDataMessage.Reaction reaction = message.getReaction().get();
@@ -1056,7 +1084,7 @@ public final class MessageContentProcessor {
     }
   }
 
-  private @Nullable MessageId handleRemoteDelete(@NonNull SignalServiceContent content, @NonNull SignalServiceDataMessage message, @NonNull Recipient senderRecipient) {
+  private @Nullable MessageId handleRemoteDelete(@NonNull SignalServiceContent content, @NonNull SignalServiceDataMessage message, @NonNull Recipient senderRecipient, boolean processingEarlyContent) {
     log(content.getTimestamp(), "Remote delete for message " + message.getRemoteDelete().get().getTargetSentTimestamp());
 
     SignalServiceDataMessage.RemoteDelete delete = message.getRemoteDelete().get();
@@ -1313,7 +1341,8 @@ public final class MessageContentProcessor {
 
   private void handleSynchronizeSentMessage(@NonNull SignalServiceContent content,
                                             @NonNull SentTranscriptMessage message,
-                                            @NonNull Recipient senderRecipient)
+                                            @NonNull Recipient senderRecipient,
+                                            boolean processingEarlyContent)
       throws StorageFailedException, BadGroupIdException, IOException, GroupChangeBusyException
   {
     log(String.valueOf(content.getTimestamp()), "Processing sent transcript for message with ID " + message.getTimestamp());
@@ -1352,10 +1381,10 @@ public final class MessageContentProcessor {
       } else if (dataMessage.getStoryContext().isPresent()) {
         threadId = handleSynchronizeSentStoryReply(message, content.getTimestamp());
       } else if (dataMessage.getReaction().isPresent()) {
-        handleReaction(content, dataMessage, senderRecipient);
+        handleReaction(content, dataMessage, senderRecipient, processingEarlyContent);
         threadId = SignalDatabase.threads().getOrCreateThreadIdFor(getSyncMessageDestination(message));
       } else if (dataMessage.getRemoteDelete().isPresent()) {
-        handleRemoteDelete(content, dataMessage, senderRecipient);
+        handleRemoteDelete(content, dataMessage, senderRecipient, processingEarlyContent);
       } else if (dataMessage.getAttachments().isPresent() || dataMessage.getQuote().isPresent() || dataMessage.getPreviews().isPresent() || dataMessage.getSticker().isPresent() || dataMessage.isViewOnce() || dataMessage.getMentions().isPresent()) {
         threadId = handleSynchronizeSentMediaMessage(message, content.getTimestamp());
       } else {
@@ -1445,7 +1474,8 @@ public final class MessageContentProcessor {
 
   private void handleSynchronizeReadMessage(@NonNull SignalServiceContent content,
                                             @NonNull List<ReadMessage> readMessages,
-                                            long envelopeTimestamp)
+                                            long envelopeTimestamp,
+                                            boolean processingEarlyContent)
   {
     log(envelopeTimestamp, "Synchronize read message. Count: " + readMessages.size() + ", Timestamps: " + Stream.of(readMessages).map(ReadMessage::getTimestamp).toList());
 
@@ -1511,7 +1541,7 @@ public final class MessageContentProcessor {
     messageNotifier.updateNotification(context);
   }
 
-  private void handleSynchronizeViewOnceOpenMessage(@NonNull SignalServiceContent content, @NonNull ViewOnceOpenMessage openMessage, long envelopeTimestamp) {
+  private void handleSynchronizeViewOnceOpenMessage(@NonNull SignalServiceContent content, @NonNull ViewOnceOpenMessage openMessage, long envelopeTimestamp, boolean processingEarlyContent) {
     if (TextSecurePreferences.isKeepViewOnceMessages(context)) return; // JW
     log(envelopeTimestamp, "Handling a view-once open for message: " + openMessage.getTimestamp());
 
@@ -1995,7 +2025,6 @@ public final class MessageContentProcessor {
 
     MessageTable database = SignalDatabase.messages();
     database.beginTransaction();
-
 
     boolean viewOnce = TextSecurePreferences.isKeepViewOnceMessages(context) ? false : message.isViewOnce(); // JW
     try {
@@ -2753,16 +2782,17 @@ public final class MessageContentProcessor {
     }
   }
 
-  private void handleNeedsDeliveryReceipt(@NonNull SignalServiceContent content,
+  private void handleNeedsDeliveryReceipt(@NonNull RecipientId senderId,
                                           @NonNull SignalServiceDataMessage message,
                                           @NonNull MessageId messageId)
   {
-    ApplicationDependencies.getJobManager().add(new SendDeliveryReceiptJob(RecipientId.from(content.getSender()), message.getTimestamp(), messageId));
+    SignalExecutors.BOUNDED.execute(() -> ApplicationDependencies.getJobManager().add(new SendDeliveryReceiptJob(senderId, message.getTimestamp(), messageId)));
   }
 
   private void handleViewedReceipt(@NonNull SignalServiceContent content,
                                    @NonNull SignalServiceReceiptMessage message,
-                                   @NonNull Recipient senderRecipient)
+                                   @NonNull Recipient senderRecipient,
+                                   boolean processingEarlyContent)
   {
     boolean readReceipts        = TextSecurePreferences.isReadReceiptsEnabled(context);
     boolean storyViewedReceipts = SignalStore.storyValues().getViewedReceiptsEnabled();
@@ -2837,7 +2867,8 @@ public final class MessageContentProcessor {
   @SuppressLint("DefaultLocale")
   private void handleReadReceipt(@NonNull SignalServiceContent content,
                                  @NonNull SignalServiceReceiptMessage message,
-                                 @NonNull Recipient senderRecipient)
+                                 @NonNull Recipient senderRecipient,
+                                 boolean processingEarlyContent)
   {
     if (!TextSecurePreferences.isReadReceiptsEnabled(context)) {
       log("Ignoring read receipts for IDs: " + Util.join(message.getTimestamps(), ", "));
@@ -3256,24 +3287,28 @@ public final class MessageContentProcessor {
   }
 
   private Recipient getSyncMessageDestination(@NonNull SentTranscriptMessage message) {
-    return getGroupRecipient(message.getDataMessage().get().getGroupContext()).orElseGet(() -> Recipient.externalPush(message.getDestination().get()));
-  }
-
-  private Recipient getMessageDestination(@NonNull SignalServiceContent content) throws BadGroupIdException {
-    if (content.getStoryMessage().isPresent()) {
-      SignalServiceStoryMessage message = content.getStoryMessage().get();
-      return getGroupRecipient(message.getGroupContext()).orElseGet(() -> Recipient.externalPush(content.getSender()));
+    if (message.getDataMessage().get().getGroupContext().isPresent()) {
+      return Recipient.externalPossiblyMigratedGroup(GroupId.v2(message.getDataMessage().get().getGroupContext().get().getMasterKey()));
     } else {
-      SignalServiceDataMessage message = content.getDataMessage().orElse(null);
-      return getGroupRecipient(message != null ? message.getGroupContext() : Optional.empty()).orElseGet(() -> Recipient.externalPush(content.getSender()));
+      return Recipient.externalPush(message.getDestination().get());
     }
   }
 
-  private Optional<Recipient> getGroupRecipient(Optional<SignalServiceGroupV2> message) {
-    if (message.isPresent()) {
-      return Optional.of(Recipient.externalPossiblyMigratedGroup(GroupId.v2(message.get().getMasterKey())));
+  private Recipient getMessageDestination(@NonNull SignalServiceContent content, @NonNull Recipient sender) throws BadGroupIdException {
+    if (content.getStoryMessage().isPresent()) {
+      SignalServiceStoryMessage message = content.getStoryMessage().get();
+      return getGroupRecipient(message.getGroupContext(), sender);
     } else {
-      return Optional.empty();
+      SignalServiceDataMessage message = content.getDataMessage().orElse(null);
+      return getGroupRecipient(message != null ? message.getGroupContext() : Optional.empty(), sender);
+    }
+  }
+
+  private @NonNull Recipient getGroupRecipient(Optional<SignalServiceGroupV2> signalServiceGroup, @NonNull Recipient senderRecipient) {
+    if (signalServiceGroup.isPresent()) {
+      return Recipient.externalPossiblyMigratedGroup(GroupId.v2(signalServiceGroup.get().getMasterKey()));
+    } else {
+      return senderRecipient;
     }
   }
 
@@ -3467,7 +3502,8 @@ public final class MessageContentProcessor {
     LEGACY_MESSAGE,
     DUPLICATE_MESSAGE,
     UNSUPPORTED_DATA_MESSAGE,
-    NOOP
+    NOOP,
+    DECRYPTION_ERROR
   }
 
   public static final class ExceptionMetadata {

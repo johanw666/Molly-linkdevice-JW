@@ -19,6 +19,7 @@ import org.signal.storageservice.protos.groups.local.DecryptedGroupChange;
 import org.signal.storageservice.protos.groups.local.DecryptedMember;
 import org.signal.storageservice.protos.groups.local.DecryptedPendingMember;
 import org.signal.storageservice.protos.groups.local.DecryptedPendingMemberRemoval;
+import org.signal.storageservice.protos.groups.local.DecryptedRequestingMember;
 import org.thoughtcrime.securesms.database.GroupTable;
 import org.thoughtcrime.securesms.database.model.GroupRecord;
 import org.thoughtcrime.securesms.database.MessageTable;
@@ -334,7 +335,14 @@ public class GroupsV2StateProcessor {
                                                       .filter(Objects::nonNull)
                                                       .anyMatch(serviceIds::matches);
 
-      return !currentlyInGroup && !addedAsMember && !addedAsPendingMember;
+      boolean addedAsRequestingMember = signedGroupChange.getNewRequestingMembersList()
+                                                         .stream()
+                                                         .map(DecryptedRequestingMember::getUuid)
+                                                         .map(UuidUtil::fromByteStringOrNull)
+                                                         .filter(Objects::nonNull)
+                                                         .anyMatch(serviceIds::matches);
+
+      return !currentlyInGroup && !addedAsMember && !addedAsPendingMember && !addedAsRequestingMember;
     }
 
     private boolean notHavingInviteRevoked(@NonNull DecryptedGroupChange signedGroupChange) {
@@ -678,7 +686,7 @@ public class GroupsV2StateProcessor {
 
           // JW: changed logic with more options
           if (!mayThisPersonAddYouToAGroup(addedBy) && (inputGroupState.getLocalState() == null || !DecryptedGroupUtil.isRequesting(inputGroupState.getLocalState(), serviceId.uuid()))) {
-            Log.i(TAG, "Added by a not allowed user: " + addedBy.getDisplayName(context) + ". Leaving group.");
+            Log.i(TAG, "Added by a blocked user. Leaving group.");
             ApplicationDependencies.getJobManager().add(new LeaveGroupV2Job(groupId));
             //noinspection UnnecessaryReturnStatement
             return;
@@ -697,7 +705,7 @@ public class GroupsV2StateProcessor {
                                                                                      .map(uuid -> Recipient.externalPush(ServiceId.from(uuid))));
 
         if (addedBy.isPresent() && !mayThisPersonAddYouToAGroup(addedBy.get())) { // JW: replaced blocked by more general permission
-          Log.i(TAG, String.format( "Added to group %s by a blocked user %s. Leaving group.", groupId, addedBy.get().getId()));
+          Log.i(TAG, String.format("Added to group %s by a blocked user %s. Leaving group.", groupId, addedBy.get().getId()));
           ApplicationDependencies.getJobManager().add(new LeaveGroupV2Job(groupId));
           //noinspection UnnecessaryReturnStatement
           return;
