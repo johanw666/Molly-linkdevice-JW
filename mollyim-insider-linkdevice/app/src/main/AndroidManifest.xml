@@ -29,10 +29,7 @@
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
 
-<!-- JW: override for Android 10. For Android 11 we can switch to MANAGE_EXTERNAL_STORAGE permission.
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-                     android:maxSdkVersion="28" />
--->
+    <!-- JW: override for Android 10. For Android 11 we can switch to MANAGE_EXTERNAL_STORAGE permission. -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
@@ -327,6 +324,11 @@
               android:windowSoftInputMode="stateAlwaysVisible"
               android:configChanges="touchscreen|keyboard|keyboardHidden|orientation|screenLayout|screenSize"/>
 
+    <activity android:name=".calls.new.NewCallActivity"
+            android:theme="@style/Theme.Signal.DayNight.NoActionBar"
+            android:windowSoftInputMode="stateAlwaysVisible"
+            android:configChanges="touchscreen|keyboard|keyboardHidden|orientation|screenLayout|screenSize"/>
+
     <activity android:name=".PushContactSelectionActivity"
           android:label="@string/AndroidManifest__select_contacts"
           android:windowSoftInputMode="stateHidden"
@@ -341,7 +343,7 @@
             android:theme="@style/TextSecure.DarkNoActionBar"
             android:windowSoftInputMode="stateAlwaysHidden|adjustNothing"
             android:launchMode="singleTop"
-            android:configChanges="touchscreen|keyboard|keyboardHidden|orientation|screenLayout|screenSize"/>
+            android:configChanges="touchscreen|keyboard|keyboardHidden|orientation|screenLayout|screenSize|uiMode"/>
 
         <activity android:name=".conversation.mutiselect.forward.MultiselectForwardActivity"
             android:theme="@style/Signal.DayNight.NoActionBar"
@@ -405,6 +407,12 @@
             android:windowSoftInputMode="stateAlwaysHidden">
         </activity>
 
+        <activity android:name=".components.settings.conversation.CallInfoActivity"
+            android:configChanges="touchscreen|keyboard|keyboardHidden|screenLayout|screenSize"
+            android:theme="@style/Signal.DayNight.NoActionBar"
+            android:windowSoftInputMode="stateAlwaysHidden">
+        </activity>
+
         <activity android:name=".wallpaper.ChatWallpaperActivity"
                   android:configChanges="touchscreen|keyboard|keyboardHidden|orientation|screenLayout|screenSize"
                   android:windowSoftInputMode="stateAlwaysHidden">
@@ -465,6 +473,13 @@
               android:label="@string/AndroidManifest__media_preview"
               android:windowSoftInputMode="stateHidden"
               android:configChanges="touchscreen|keyboard|keyboardHidden|orientation|screenLayout|screenSize"/>
+
+    <activity
+              android:name=".avatar.photo.PhotoEditorActivity"
+              android:configChanges="touchscreen|keyboard|keyboardHidden|orientation|screenLayout|screenSize|uiMode"
+              android:label="@string/AndroidManifest__media_preview"
+              android:theme="@style/TextSecure.DarkNoActionBar"
+              android:windowSoftInputMode="stateHidden" />
 
     <activity android:name=".mediaoverview.MediaOverviewActivity"
               android:theme="@style/Theme.Signal.DayNight.NoActionBar"
@@ -549,12 +564,6 @@
             android:theme="@style/TextSecure.LightRegistrationTheme"
             android:windowSoftInputMode="adjustResize"
             android:configChanges="touchscreen|keyboard|keyboardHidden|orientation|screenLayout|screenSize"/>
-
-    <activity android:name=".ClearAvatarPromptActivity"
-              android:theme="@style/Theme.AppCompat.Dialog.Alert"
-              android:icon="@drawable/clear_profile_avatar"
-              android:label="@string/AndroidManifest_remove_photo"
-              android:configChanges="touchscreen|keyboard|keyboardHidden|orientation|screenLayout|screenSize"/>
 
     <activity android:name=".contacts.TurnOffContactJoinedNotificationsActivity"
               android:theme="@style/Theme.AppCompat.Dialog.Alert" />

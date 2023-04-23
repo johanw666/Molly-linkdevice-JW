@@ -56,9 +56,9 @@ ext {
     MAPS_API_KEY = getEnv('CI_MAPS_API_KEY') ?: mapsApiKey
 }
 
-def canonicalVersionCode = 1232
-def canonicalVersionName = "6.14.5-2.0-JW-linkdevice"
-def mollyRevision = 1
+def canonicalVersionCode = 1242
+def canonicalVersionName = "6.17.3-1.0-JW-linkdevice"
+def mollyRevision = 0
 
 def postFixSize = 100
 // JW: added
@@ -190,7 +190,7 @@ android {
 
         manifestPlaceholders = [mapsApiKey:MAPS_API_KEY]
 
-        buildConfigField "long", "BUILD_TIMESTAMP", System.currentTimeMillis() + "L" // JW: build without git clone
+        buildConfigField "long", "BUILD_TIMESTAMP", "1000L" // JW: fixed time for reproducible builds, is not used anyway
         buildConfigField "String", "GIT_HASH", "\"00000\"" // JW: empty string, I don't build from a repository
         buildConfigField "String", "SIGNAL_URL", "\"https://chat.signal.org\""
         buildConfigField "String", "STORAGE_URL", "\"https://storage.signal.org\""
@@ -227,6 +227,7 @@ android {
         // buildConfigField "String", "BUILD_ENVIRONMENT_TYPE", "\"unset\""
         // buildConfigField "String", "BUILD_VARIANT_TYPE", "\"unset\""
         buildConfigField "String", "BADGE_STATIC_ROOT", "\"https://updates2.signal.org/static/badges/\""
+        buildConfigField "boolean", "TRACING_ENABLED", "false"
 
         ndk {
             // abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86_64' // JW
@@ -398,13 +399,13 @@ tasks.withType(JavaCompile) {
 }
 
 dependencies {
+    implementation 'net.lingala.zip4j:zip4j:2.11.5' // JW: added
     implementation libs.androidx.core.ktx
     implementation libs.androidx.fragment.ktx
     lintChecks project(':lintchecks')
 
     coreLibraryDesugaring libs.android.tools.desugar
 
-    implementation 'net.lingala.zip4j:zip4j:2.11.5' // JW: added
     implementation (libs.androidx.appcompat) {
         version {
             strictly '1.6.1'
@@ -437,6 +438,9 @@ dependencies {
     implementation libs.androidx.autofill
     implementation libs.androidx.biometric
     implementation libs.androidx.sharetarget
+    implementation libs.androidx.profileinstaller
+    implementation libs.androidx.asynclayoutinflater
+    implementation libs.androidx.asynclayoutinflater.appcompat
     implementation libs.androidx.webkit
 
     gmsImplementation (libs.firebase.messaging) {
@@ -512,6 +516,7 @@ dependencies {
         exclude group: 'org.freemarker'
     }
     implementation libs.dnsjava
+    implementation libs.kotlinx.collections.immutable
 
     implementation libs.gosimple.nbvcxz
     implementation libs.molly.native.utils
