@@ -226,7 +226,7 @@ object SyncMessageProcessor {
     return if (message.message.hasGroupContext) {
       Recipient.externalPossiblyMigratedGroup(GroupId.v2(message.message.groupV2.groupMasterKey))
     } else {
-      Recipient.externalPush(ServiceId.parseOrThrow(message.destinationUuid))
+      Recipient.externalPush(SignalServiceAddress(ServiceId.parseOrThrow(message.destinationUuid), message.destinationE164))
     }
   }
 
@@ -1010,7 +1010,7 @@ object SyncMessageProcessor {
 
     log(envelopeTimestamp, "Synchronize call event call: $callId")
 
-    val call = SignalDatabase.calls.getCallById(callId)
+    val call = SignalDatabase.calls.getCallById(callId, CallTable.CallConversationId.Peer(recipientId))
     if (call != null) {
       val typeMismatch = call.type !== type
       val directionMismatch = call.direction !== direction
@@ -1045,7 +1045,11 @@ object SyncMessageProcessor {
       return
     }
 
-    val call = SignalDatabase.calls.getCallById(callId)
+    val groupId: GroupId = GroupId.push(callEvent.conversationId.toByteArray())
+    val recipientId = Recipient.externalGroupExact(groupId).id
+    val conversationId = CallTable.CallConversationId.Peer(recipientId)
+
+    val call = SignalDatabase.calls.getCallById(callId, CallTable.CallConversationId.Peer(recipientId))
 
     if (call != null) {
       if (call.type !== type) {
@@ -1056,7 +1060,7 @@ object SyncMessageProcessor {
         CallTable.Event.DELETE -> SignalDatabase.calls.deleteGroupCall(call)
         CallTable.Event.ACCEPTED -> {
           if (call.timestamp < callEvent.timestamp) {
-            SignalDatabase.calls.setTimestamp(call.callId, callEvent.timestamp)
+            SignalDatabase.calls.setTimestamp(call.callId, conversationId, callEvent.timestamp)
           }
           if (callEvent.direction == SyncMessage.CallEvent.Direction.INCOMING) {
             SignalDatabase.calls.acceptIncomingGroupCall(call)
@@ -1068,8 +1072,6 @@ object SyncMessageProcessor {
         else -> warn("Unsupported event type " + event + ". Ignoring. timestamp: " + timestamp + " type: " + type + " direction: " + direction + " event: " + event + " hasPeer: " + callEvent.hasConversationId())
       }
     } else {
-      val groupId: GroupId = GroupId.push(callEvent.conversationId.toByteArray())
-      val recipientId = Recipient.externalGroupExact(groupId).id
       when (event) {
         CallTable.Event.DELETE -> SignalDatabase.calls.insertDeletedGroupCallFromSyncEvent(callEvent.id, recipientId, direction, timestamp)
         CallTable.Event.ACCEPTED -> SignalDatabase.calls.insertAcceptedGroupCall(callEvent.id, recipientId, direction, timestamp)

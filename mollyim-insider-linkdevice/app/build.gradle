@@ -56,8 +56,8 @@ ext {
     MAPS_API_KEY = getEnv('CI_MAPS_API_KEY') ?: mapsApiKey
 }
 
-def canonicalVersionCode = 1242
-def canonicalVersionName = "6.17.3-1.0-JW-linkdevice"
+def canonicalVersionCode = 1247
+def canonicalVersionName = "6.18.4-1.0-JW-linkdevice"
 def mollyRevision = 0
 
 def postFixSize = 100
@@ -73,6 +73,7 @@ def selectableVariants = [
         'prodFossStoreRelease',
         'prodGmsWebsiteDebug',
         'prodGmsWebsiteRelease',
+        'prodGmsWebsiteCanary',
         'prodGmsWebsiteInstrumentation',
         'prodGmsWebsiteSpinner',
         'stagingFossWebsiteDebug',
@@ -185,6 +186,7 @@ android {
         buildConfigField "int", "SIGNAL_CANONICAL_VERSION_CODE", "$canonicalVersionCode"
         buildConfigField "String", "BACKUP_FILENAME", "\"" + BASE_APP_FILENAME.toLowerCase() + "\""
         buildConfigField "boolean", "FORCE_INTERNAL_USER_FLAG", "$FORCE_INTERNAL_USER_FLAG"
+        buildConfigField "boolean", "USE_OSM", "false"
 
         vectorDrawables.useSupportLibrary = true
 
@@ -297,6 +299,14 @@ android {
             shrinkResources true
             proguardFiles = buildTypes.debug.proguardFiles
         }
+
+        canary {
+            initWith debug
+            isDefault false
+            minifyEnabled false
+            matchingFallbacks = ['debug']
+            buildConfigField "String", "BUILD_VARIANT_TYPE", "\"Canary\""
+        }
     }
 
     productFlavors {
@@ -323,6 +333,7 @@ android {
             versionNameSuffix '-FOSS'
             buildConfigField "boolean", "USE_PLAY_SERVICES", "false"
             buildConfigField "String", "FDROID_UPDATE_URL", "\"https://molly.im/fdroid/foss/repo\""
+            buildConfigField "boolean", "USE_OSM", "true"
         }
 
         prod {
@@ -452,6 +463,8 @@ dependencies {
     gmsImplementation libs.google.play.services.maps
     gmsImplementation libs.google.play.services.auth
 
+    fossImplementation 'org.osmdroid:osmdroid-android:6.1.16'
+
     implementation libs.bundles.exoplayer
 
     implementation libs.conscrypt.android
@@ -522,7 +535,8 @@ dependencies {
     implementation libs.molly.native.utils
 
     spinnerImplementation project(":spinner")
-    spinnerImplementation libs.square.leakcanary
+
+    canaryImplementation libs.square.leakcanary
 
     testImplementation testLibs.junit.junit
     testImplementation testLibs.assertj.core
