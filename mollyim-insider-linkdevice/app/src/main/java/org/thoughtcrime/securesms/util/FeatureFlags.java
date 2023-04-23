@@ -85,8 +85,8 @@ public final class FeatureFlags {
   private static final String SOFTWARE_AEC_BLOCKLIST_MODELS     = "android.calling.softwareAecBlockList";
   private static final String USE_HARDWARE_AEC_IF_OLD           = "android.calling.useHardwareAecIfOlderThanApi29";
   private static final String USE_AEC3                          = "android.calling.useAec3";
-  private static final String PAYMENTS_COUNTRY_BLOCKLIST        = "android.payments.blocklist";
-  private static final String PHONE_NUMBER_PRIVACY              = "android.pnp";
+  private static final String PAYMENTS_COUNTRY_BLOCKLIST        = "global.payments.disabledRegions";
+  public  static final String PHONE_NUMBER_PRIVACY              = "android.pnp";
   private static final String USE_FCM_FOREGROUND_SERVICE        = "android.useFcmForegroundService.3";
   private static final String STORIES_AUTO_DOWNLOAD_MAXIMUM     = "android.stories.autoDownloadMaximum";
   private static final String TELECOM_MANUFACTURER_ALLOWLIST    = "android.calling.telecomAllowList";
@@ -103,7 +103,8 @@ public final class FeatureFlags {
   private static final String CDS_HARD_LIMIT                    = "android.cds.hardLimit";
   private static final String CHAT_FILTERS                      = "android.chat.filters.3";
   private static final String PAYPAL_ONE_TIME_DONATIONS         = "android.oneTimePayPalDonations.2";
-  private static final String PAYPAL_RECURRING_DONATIONS        = "android.recurringPayPalDonations.2";
+  private static final String PAYPAL_RECURRING_DONATIONS        = "android.recurringPayPalDonations.3";
+  private static final String TEXT_FORMATTING                   = "android.textFormatting";
 
   /**
    * We will only store remote values for flags in this set. If you want a flag to be controllable
@@ -157,7 +158,8 @@ public final class FeatureFlags {
       CDS_HARD_LIMIT,
       CHAT_FILTERS,
       PAYPAL_ONE_TIME_DONATIONS,
-      PAYPAL_RECURRING_DONATIONS
+      PAYPAL_RECURRING_DONATIONS,
+      TEXT_FORMATTING
   );
 
   @VisibleForTesting
@@ -221,7 +223,8 @@ public final class FeatureFlags {
       RECIPIENT_MERGE_V2,
       CREDIT_CARD_PAYMENTS,
       PAYMENTS_REQUEST_ACTIVATE_FLOW,
-      CDS_HARD_LIMIT
+      CDS_HARD_LIMIT,
+      TEXT_FORMATTING
   );
 
   /**
@@ -525,6 +528,13 @@ public final class FeatureFlags {
    */
   public static boolean chatFilters() {
     return getBoolean(CHAT_FILTERS, false);
+  }
+
+  /**
+   * Whether or not we should show text formatting options.
+   */
+  public static boolean textFormatting() {
+    return getBoolean(TEXT_FORMATTING, false);
   }
 
   /** Only for rendering debug info. */

@@ -449,7 +449,7 @@ public class ImportExportFragment extends Fragment {
   private void handleExportEncryptedBackup() {
     CheckAndGetAccessPermissionApi30();
     AlertDialog.Builder builder = new AlertDialog.Builder(getActivity());
-    builder.setIcon(R.drawable.ic_info_outline);
+    builder.setIcon(R.drawable.symbol_info_24);
     builder.setTitle(getActivity().getString(R.string.ExportFragment_export_to_sd_card));
     builder.setMessage(getActivity().getString(R.string.ExportFragment_this_will_export_your_encrypted_keys_settings_and_messages));
     builder.setPositiveButton(getActivity().getString(R.string.ExportFragment_export), (dialog, which) -> {
