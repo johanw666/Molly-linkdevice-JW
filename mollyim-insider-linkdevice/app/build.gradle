@@ -56,8 +56,8 @@ ext {
     MAPS_API_KEY = getEnv('CI_MAPS_API_KEY') ?: mapsApiKey
 }
 
-def canonicalVersionCode = 1247
-def canonicalVersionName = "6.18.4-1.0-JW-linkdevice"
+def canonicalVersionCode = 1262
+def canonicalVersionName = "6.20.6-1.0-JW-linkdevice"
 def mollyRevision = 0
 
 def postFixSize = 100
@@ -154,7 +154,8 @@ android {
         jniLibs {
             // MOLLY: Compress native libs by default as APK is not split on ABIs
             useLegacyPackaging true
-        }    }
+        }
+    }
 
 
     buildFeatures {
@@ -198,7 +199,6 @@ android {
         buildConfigField "String", "STORAGE_URL", "\"https://storage.signal.org\""
         buildConfigField "String", "SIGNAL_CDN_URL", "\"https://cdn.signal.org\""
         buildConfigField "String", "SIGNAL_CDN2_URL", "\"https://cdn2.signal.org\""
-        buildConfigField "String", "SIGNAL_CONTACT_DISCOVERY_URL", "\"https://api.directory.signal.org\""
         buildConfigField "String", "SIGNAL_CDSI_URL", "\"https://cdsi.signal.org\""
         buildConfigField "String", "SIGNAL_SERVICE_STATUS_URL", "\"uptime.signal.org\""
         buildConfigField "String", "SIGNAL_KEY_BACKUP_URL", "\"https://api.backup.signal.org\""
@@ -246,6 +246,12 @@ android {
         }
 
         resConfigs autoResConfig()
+
+        bundle {
+            language {
+                enableSplit = false
+            }
+        }
 
         testInstrumentationRunner "org.thoughtcrime.securesms.testing.SignalTestRunner"
         testInstrumentationRunnerArguments clearPackageData: 'true'
@@ -354,7 +360,6 @@ android {
             buildConfigField "String", "STORAGE_URL", "\"https://storage-staging.signal.org\""
             buildConfigField "String", "SIGNAL_CDN_URL", "\"https://cdn-staging.signal.org\""
             buildConfigField "String", "SIGNAL_CDN2_URL", "\"https://cdn2-staging.signal.org\""
-            buildConfigField "String", "SIGNAL_CONTACT_DISCOVERY_URL", "\"https://api-staging.directory.signal.org\""
             buildConfigField "String", "SIGNAL_CDSI_URL", "\"https://cdsi.staging.signal.org\""
             buildConfigField "String", "SIGNAL_KEY_BACKUP_URL", "\"https://api-staging.backup.signal.org\""
             buildConfigField "org.thoughtcrime.securesms.KbsEnclave", "KBS_ENCLAVE", "new org.thoughtcrime.securesms.KbsEnclave(\"39963b736823d5780be96ab174869a9499d56d66497aa8f9b2244f777ebc366b\", " +
@@ -411,7 +416,6 @@ tasks.withType(JavaCompile) {
 
 dependencies {
     implementation 'net.lingala.zip4j:zip4j:2.11.5' // JW: added
-    implementation libs.androidx.core.ktx
     implementation libs.androidx.fragment.ktx
     lintChecks project(':lintchecks')
 
@@ -571,6 +575,8 @@ dependencies {
     }
 
     testImplementation testLibs.espresso.core
+
+    implementation libs.kotlin.stdlib.jdk8
 
     implementation libs.rxjava3.rxandroid
     implementation libs.rxjava3.rxkotlin

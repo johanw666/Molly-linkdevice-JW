@@ -17,20 +17,20 @@ import java.util.HashSet;
 import java.util.Set;
 
 public class PlaintextBackupImporter {
-
   private static final String TAG = Log.tag(PlaintextBackupImporter.class);
 
   public static SQLiteStatement createMessageInsertStatement(SQLiteDatabase database) {
     return database.compileStatement("INSERT INTO " + MessageTable.TABLE_NAME + " (" +
-                                     MessageTable.RECIPIENT_ID + ", " +
+                                     MessageTable.FROM_RECIPIENT_ID + ", " +
                                      MessageTable.DATE_SENT + ", " +
                                      MessageTable.DATE_RECEIVED + ", " +
                                      MessageTable.READ + ", " +
                                      MessageTable.MMS_STATUS + ", " +
                                      MessageTable.TYPE + ", " +
                                      MessageTable.BODY + ", " +
-                                     MessageTable.THREAD_ID + ") " +
-                                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+                                     MessageTable.THREAD_ID +  ", " +
+                                     MessageTable.TO_RECIPIENT_ID +  ") " +
+                                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
   }
 
   public static void importPlaintextFromSd(Context context) throws NoExternalStorageException, IOException
@@ -71,6 +71,7 @@ public class PlaintextBackupImporter {
         addTranslatedTypeToStatement(statement, 6, item.getType());
         addStringToStatement(statement, 7, item.getBody());
         addLongToStatement(statement, 8, threadId);
+        addLongToStatement(statement, 9, item.getRecipient());
         modifiedThreads.add(threadId);
         //statement.execute();
         long rowId = statement.executeInsert();

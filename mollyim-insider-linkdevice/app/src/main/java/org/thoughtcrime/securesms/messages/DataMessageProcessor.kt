@@ -90,7 +90,7 @@ import org.thoughtcrime.securesms.util.Base64
 import org.thoughtcrime.securesms.util.EarlyMessageCacheEntry
 import org.thoughtcrime.securesms.util.LinkUtil
 import org.thoughtcrime.securesms.util.MediaUtil
-import org.thoughtcrime.securesms.util.RemoteDeleteUtil
+import org.thoughtcrime.securesms.util.MessageConstraintsUtil
 import org.thoughtcrime.securesms.util.TextSecurePreferences
 import org.thoughtcrime.securesms.util.isStory
 import org.whispersystems.signalservice.api.crypto.EnvelopeMetadata
@@ -141,10 +141,10 @@ object DataMessageProcessor {
       message.isPaymentActivationRequest -> messageId = handlePaymentActivation(envelope, metadata, message, senderRecipient.id, receivedTime, isActivatePaymentsRequest = true, isPaymentsActivated = false)
       message.isPaymentActivated -> messageId = handlePaymentActivation(envelope, metadata, message, senderRecipient.id, receivedTime, isActivatePaymentsRequest = false, isPaymentsActivated = true)
       message.hasPayment() -> messageId = handlePayment(context, envelope, metadata, message, senderRecipient.id, receivedTime)
-      message.hasStoryContext() -> messageId = handleStoryReply(context, envelope, metadata, message, senderRecipient.id, groupId, receivedTime)
+      message.hasStoryContext() -> messageId = handleStoryReply(context, envelope, metadata, message, senderRecipient, groupId, receivedTime)
       message.hasGiftBadge() -> messageId = handleGiftMessage(context, envelope, metadata, message, senderRecipient, threadRecipient.id, receivedTime)
-      message.isMediaMessage -> messageId = handleMediaMessage(context, envelope, metadata, message, senderRecipient, threadRecipient.id, groupId, receivedTime)
-      message.hasBody() -> messageId = handleTextMessage(context, envelope, metadata, message, senderRecipient, threadRecipient.id, groupId, receivedTime)
+      message.isMediaMessage -> messageId = handleMediaMessage(context, envelope, metadata, message, senderRecipient, threadRecipient, groupId, receivedTime)
+      message.hasBody() -> messageId = handleTextMessage(context, envelope, metadata, message, senderRecipient, threadRecipient, groupId, receivedTime)
       message.hasGroupCallUpdate() -> handleGroupCallUpdateMessage(envelope, message, senderRecipient.id, groupId)
     }
 
@@ -197,6 +197,9 @@ object DataMessageProcessor {
         StorageSyncHelper.scheduleSyncForDataChange()
       }
     } else if (messageProfileKey != null) {
+      if (messageProfileKeyBytes.contentEquals(senderRecipient.profileKey)) {
+        return
+      }
       if (SignalDatabase.recipients.setProfileKey(senderRecipient.id, messageProfileKey)) {
         log(timestamp, "Profile key on message from " + senderRecipient.id + " didn't match our local store. It has been updated.")
         ApplicationDependencies.getJobManager().add(RetrieveProfileJob.forRecipient(senderRecipient.id))
@@ -319,18 +322,18 @@ object DataMessageProcessor {
    * Inserts an expiration update if the message timer doesn't match the thread timer.
    */
   @Throws(StorageFailedException::class)
-  private fun handlePossibleExpirationUpdate(
+  fun handlePossibleExpirationUpdate(
     envelope: Envelope,
     metadata: EnvelopeMetadata,
     senderRecipientId: RecipientId,
-    threadRecipientId: RecipientId,
+    threadRecipient: Recipient,
     groupId: GroupId.V2?,
     expiresIn: Duration,
     receivedTime: Long
   ) {
-    if (SignalDatabase.recipients.getExpiresInSeconds(threadRecipientId) != expiresIn.inWholeSeconds) {
+    if (threadRecipient.expiresInSeconds.toLong() != expiresIn.inWholeSeconds) {
       warn(envelope.timestamp, "Message expire time didn't match thread expire time. Handling timer update.")
-      handleExpirationUpdate(envelope, metadata, senderRecipientId, threadRecipientId, groupId, expiresIn, receivedTime, true)
+      handleExpirationUpdate(envelope, metadata, senderRecipientId, threadRecipient.id, groupId, expiresIn, receivedTime, true)
     }
   }
 
@@ -445,6 +448,11 @@ object DataMessageProcessor {
     val targetAuthorServiceId: ServiceId = ServiceId.parseOrThrow(message.reaction.targetAuthorUuid)
     val targetSentTimestamp = message.reaction.targetSentTimestamp
 
+    if (targetAuthorServiceId.isUnknown) {
+      warn(envelope.timestamp, "Reaction was to an unknown UUID! Ignoring the message.")
+      return null
+    }
+
     if (!EmojiUtil.isEmoji(emoji)) {
       warn(envelope.timestamp, "Reaction text is not a valid emoji! Ignoring the message.")
       return null
@@ -484,7 +492,7 @@ object DataMessageProcessor {
       return null
     }
 
-    val targetMessageId = MessageId(targetMessage.id)
+    val targetMessageId = (targetMessage as? MediaMmsMessageRecord)?.latestRevisionId ?: MessageId(targetMessage.id)
 
     if (isRemove) {
       SignalDatabase.reactions.deleteReaction(targetMessageId, senderRecipientId)
@@ -518,7 +526,7 @@ object DataMessageProcessor {
     // JW: set a reaction to indicate the message was attempted to be remote deleted. Sender is myself, emoji is an exclamation.
     if (TextSecurePreferences.isIgnoreRemoteDelete(context)) { setMessageReaction(context, message, targetMessage, "\u2757"); return null; }
 
-    return if (targetMessage != null && RemoteDeleteUtil.isValidReceive(targetMessage, senderRecipientId, envelope.serverTimestamp)) {
+    return if (targetMessage != null && MessageConstraintsUtil.isValidRemoteDeleteReceive(targetMessage, senderRecipientId, envelope.serverTimestamp)) {
       SignalDatabase.messages.markAsRemoteDelete(targetMessage.id)
       if (targetMessage.isStory()) {
         SignalDatabase.messages.deleteRemotelyDeletedStory(targetMessage.id)
@@ -536,7 +544,7 @@ object DataMessageProcessor {
 
       null
     } else {
-      warn(envelope.timestamp, "[handleRemoteDelete] Invalid remote delete! deleteTime: ${envelope.serverTimestamp}, targetTime: ${targetMessage.serverTimestamp}, deleteAuthor: $senderRecipientId, targetAuthor: ${targetMessage.recipient.id}")
+      warn(envelope.timestamp, "[handleRemoteDelete] Invalid remote delete! deleteTime: ${envelope.serverTimestamp}, targetTime: ${targetMessage.serverTimestamp}, deleteAuthor: $senderRecipientId, targetAuthor: ${targetMessage.fromRecipient.id}")
       null
     }
   }
@@ -654,7 +662,7 @@ object DataMessageProcessor {
     envelope: Envelope,
     metadata: EnvelopeMetadata,
     message: DataMessage,
-    senderRecipientId: RecipientId,
+    senderRecipient: Recipient,
     groupId: GroupId.V2?,
     receivedTime: Long
   ): MessageId? {
@@ -674,7 +682,7 @@ object DataMessageProcessor {
 
       try {
         if (selfId == storyAuthorRecipientId) {
-          storyMessageId = SignalDatabase.storySends.getStoryMessageFor(senderRecipientId, sentTimestamp)
+          storyMessageId = SignalDatabase.storySends.getStoryMessageFor(senderRecipient.id, sentTimestamp)
         }
 
         if (storyMessageId == null) {
@@ -682,19 +690,19 @@ object DataMessageProcessor {
         }
 
         val story: MmsMessageRecord = SignalDatabase.messages.getMessageRecord(storyMessageId.id) as MmsMessageRecord
-        var threadRecipientId: RecipientId = SignalDatabase.threads.getRecipientForThreadId(story.threadId)!!.id
-        val groupRecord: GroupRecord? = SignalDatabase.groups.getGroup(threadRecipientId).orNull()
+        var threadRecipient: Recipient = SignalDatabase.threads.getRecipientForThreadId(story.threadId)!!
+        val groupRecord: GroupRecord? = SignalDatabase.groups.getGroup(threadRecipient.id).orNull()
         val groupStory: Boolean = groupRecord?.isActive ?: false
 
         if (!groupStory) {
-          threadRecipientId = senderRecipientId
+          threadRecipient = senderRecipient
         }
 
-        handlePossibleExpirationUpdate(envelope, metadata, senderRecipientId, threadRecipientId, groupId, message.expireTimer.seconds, receivedTime)
+        handlePossibleExpirationUpdate(envelope, metadata, senderRecipient.id, threadRecipient, groupId, message.expireTimer.seconds, receivedTime)
 
         if (message.hasGroupContext) {
           parentStoryId = GroupReply(storyMessageId.id)
-        } else if (groupStory || SignalDatabase.storySends.canReply(senderRecipientId, sentTimestamp)) {
+        } else if (groupStory || SignalDatabase.storySends.canReply(senderRecipient.id, sentTimestamp)) {
           parentStoryId = DirectReply(storyMessageId.id)
 
           var displayText = ""
@@ -718,7 +726,7 @@ object DataMessageProcessor {
       val bodyRanges: BodyRangeList? = message.bodyRangesList.filter { it.hasStyle() }.toList().toBodyRangeList()
 
       val mediaMessage = IncomingMediaMessage(
-        from = senderRecipientId,
+        from = senderRecipient.id,
         sentTimeMillis = envelope.timestamp,
         serverTimeMillis = envelope.serverTimestamp,
         receivedTimeMillis = System.currentTimeMillis(),
@@ -817,13 +825,13 @@ object DataMessageProcessor {
     metadata: EnvelopeMetadata,
     message: DataMessage,
     senderRecipient: Recipient,
-    threadRecipientId: RecipientId,
+    threadRecipient: Recipient,
     groupId: GroupId.V2?,
     receivedTime: Long
   ): MessageId? {
     log(envelope.timestamp, "Media message.")
 
-    notifyTypingStoppedFromIncomingMessage(context, senderRecipient, threadRecipientId, metadata.sourceDeviceId)
+    notifyTypingStoppedFromIncomingMessage(context, senderRecipient, threadRecipient.id, metadata.sourceDeviceId)
 
     val insertResult: InsertResult?
     val viewOnce: Boolean = if (TextSecurePreferences.isKeepViewOnceMessages(context)) false else message.isViewOnce // JW
@@ -838,7 +846,7 @@ object DataMessageProcessor {
       val attachments: List<Attachment> = message.attachmentsList.toPointers()
       val messageRanges: BodyRangeList? = if (message.bodyRangesCount > 0) message.bodyRangesList.filter { it.hasStyle() }.toList().toBodyRangeList() else null
 
-      handlePossibleExpirationUpdate(envelope, metadata, senderRecipient.id, threadRecipientId, groupId, message.expireTimer.seconds, receivedTime)
+      handlePossibleExpirationUpdate(envelope, metadata, senderRecipient.id, threadRecipient, groupId, message.expireTimer.seconds, receivedTime)
 
       val mediaMessage = IncomingMediaMessage(
         from = senderRecipient.id,
@@ -906,7 +914,7 @@ object DataMessageProcessor {
     metadata: EnvelopeMetadata,
     message: DataMessage,
     senderRecipient: Recipient,
-    threadRecipientId: RecipientId,
+    threadRecipient: Recipient,
     groupId: GroupId.V2?,
     receivedTime: Long
   ): MessageId? {
@@ -914,9 +922,9 @@ object DataMessageProcessor {
 
     val body = if (message.hasBody()) message.body else ""
 
-    handlePossibleExpirationUpdate(envelope, metadata, senderRecipient.id, threadRecipientId, groupId, message.expireTimer.seconds, receivedTime)
+    handlePossibleExpirationUpdate(envelope, metadata, senderRecipient.id, threadRecipient, groupId, message.expireTimer.seconds, receivedTime)
 
-    notifyTypingStoppedFromIncomingMessage(context, senderRecipient, threadRecipientId, metadata.sourceDeviceId)
+    notifyTypingStoppedFromIncomingMessage(context, senderRecipient, threadRecipient.id, metadata.sourceDeviceId)
 
     val textMessage = IncomingTextMessage(
       senderRecipient.id,
@@ -966,7 +974,7 @@ object DataMessageProcessor {
     GroupCallPeekJob.enqueue(groupRecipientId)
   }
 
-  private fun notifyTypingStoppedFromIncomingMessage(context: Context, senderRecipient: Recipient, threadRecipientId: RecipientId, device: Int) {
+  fun notifyTypingStoppedFromIncomingMessage(context: Context, senderRecipient: Recipient, threadRecipientId: RecipientId, device: Int) {
     val threadId = SignalDatabase.threads.getThreadIdIfExistsFor(threadRecipientId)
 
     if (threadId > 0 && TextSecurePreferences.isTypingIndicatorsEnabled(context)) {
@@ -981,7 +989,7 @@ object DataMessageProcessor {
       .mapNotNull {
         val serviceId = ServiceId.parseOrNull(it.mentionUuid)
 
-        if (serviceId != null) {
+        if (serviceId != null && !serviceId.isUnknown) {
           val id = Recipient.externalPush(serviceId).id
           Mention(id, it.start, it.length)
         } else {

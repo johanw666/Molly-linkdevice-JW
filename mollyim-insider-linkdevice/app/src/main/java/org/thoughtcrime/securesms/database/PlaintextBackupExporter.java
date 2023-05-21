@@ -55,8 +55,8 @@ public class PlaintextBackupExporter {
         while ((record = messagereader.getNext()) != null) {
           XmlBackup.XmlBackupItem item =
               new XmlBackup.XmlBackupItem(0,
-                                          record.getIndividualRecipient().getSmsAddress().orElse("null"),
-                                          record.getIndividualRecipient().getDisplayName(context),
+                                          record.getFromRecipient().getSmsAddress().orElse("null"),
+                                          record.getFromRecipient().getDisplayName(context),
                                           record.getDateReceived(),
                                           translateToSystemBaseType(record.getType()),
                                           null,
@@ -64,7 +64,8 @@ public class PlaintextBackupExporter {
                                           null,
                                           1,
                                           record.getDeliveryStatus(),
-                                          getTransportType(record));
+                                          getTransportType(record),
+                                          record.getToRecipient().getId().toLong());
 
           writer.writeItem(item);
         }

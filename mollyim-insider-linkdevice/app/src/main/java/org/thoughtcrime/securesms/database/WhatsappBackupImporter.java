@@ -35,7 +35,7 @@ import static org.thoughtcrime.securesms.database.MessageTable.VIEW_ONCE;
 import static org.thoughtcrime.securesms.database.MessageTable.DATE_SERVER;
 import static org.thoughtcrime.securesms.database.MessageTable.EXPIRES_IN;
 import static org.thoughtcrime.securesms.database.MessageTable.READ;
-import static org.thoughtcrime.securesms.database.MessageTable.RECIPIENT_ID;
+import static org.thoughtcrime.securesms.database.MessageTable.FROM_RECIPIENT_ID;
 import static org.thoughtcrime.securesms.database.MessageTable.SMS_SUBSCRIPTION_ID;
 import static org.thoughtcrime.securesms.database.MessageTable.THREAD_ID;
 import static org.thoughtcrime.securesms.database.MessageTable.BASE_INBOX_TYPE;
@@ -117,7 +117,7 @@ public class WhatsappBackupImporter {
 
     private static boolean wasMsgAlreadyImported(SQLiteDatabase db, String tableName, String dateField, long threadId, Recipient recipient, WhatsappBackup.WhatsappBackupItem item) {
         String[] cols  = new String[] {"COUNT(*)"};
-        String   query = THREAD_ID + " = ? AND " + dateField + " = ? AND " + RECIPIENT_ID + " = ?";
+        String   query = THREAD_ID + " = ? AND " + dateField + " = ? AND " + FROM_RECIPIENT_ID + " = ?";
         String[] args  = new String[]{String.valueOf(threadId), String.valueOf(item.getDate()), String.valueOf(recipient.getId().serialize())};
 
         try (Cursor cursor = db.query(tableName, cols, query, args, null, null, null)) {
@@ -188,7 +188,7 @@ public class WhatsappBackupImporter {
         ContentValues contentValues = new ContentValues();
         contentValues.put(DATE_SENT, item.getDate());
         contentValues.put(DATE_SERVER, item.getDate());
-        contentValues.put(RECIPIENT_ID, recipient.getId().serialize());
+        contentValues.put(FROM_RECIPIENT_ID, recipient.getId().serialize());
         if (item.getType() == 1) {
             contentValues.put(TYPE, BASE_INBOX_TYPE);
         } else {
