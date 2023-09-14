@@ -60,7 +60,6 @@ class ChatsSettingsFragment : DSLSettingsFragment(R.string.preferences_chats__ch
 
   private fun getConfiguration(state: ChatsSettingsState): DSLConfiguration {
     return configure {
-
       switchPref(
         title = DSLSettingsText.from(R.string.preferences__generate_link_previews),
         summary = DSLSettingsText.from(R.string.preferences__retrieve_link_previews_from_websites_for_messages),
@@ -70,12 +69,6 @@ class ChatsSettingsFragment : DSLSettingsFragment(R.string.preferences_chats__ch
           viewModel.setGenerateLinkPreviewsEnabled(!state.generateLinkPreviews)
         }
       )
-
-      if (SignalStore.account().isLinkedDevice) {
-        textPref(
-          summary = DSLSettingsText.from(R.string.preferences__primary_only)
-        )
-      }
 
       switchPref(
         title = DSLSettingsText.from(R.string.preferences__pref_use_address_book_photos),

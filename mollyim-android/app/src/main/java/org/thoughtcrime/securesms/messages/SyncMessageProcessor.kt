@@ -56,6 +56,7 @@ import org.thoughtcrime.securesms.jobs.RefreshCallLinkDetailsJob
 import org.thoughtcrime.securesms.jobs.RefreshOwnProfileJob
 import org.thoughtcrime.securesms.jobs.RotateCertificateJob
 import org.thoughtcrime.securesms.jobs.StickerPackDownloadJob
+import org.thoughtcrime.securesms.jobs.StorageSyncJob
 import org.thoughtcrime.securesms.keyvalue.SignalStore
 import org.thoughtcrime.securesms.linkpreview.LinkPreview
 import org.thoughtcrime.securesms.messages.MessageContentProcessor.Companion.log
@@ -121,6 +122,7 @@ import org.whispersystems.signalservice.internal.push.SignalServiceProtos.SyncMe
 import org.whispersystems.signalservice.internal.push.SignalServiceProtos.SyncMessage.Configuration
 import org.whispersystems.signalservice.internal.push.SignalServiceProtos.SyncMessage.FetchLatest
 import org.whispersystems.signalservice.internal.push.SignalServiceProtos.SyncMessage.MessageRequestResponse
+import org.whispersystems.signalservice.internal.push.SignalServiceProtos.SyncMessage.PniChangeNumber
 import org.whispersystems.signalservice.internal.push.SignalServiceProtos.SyncMessage.Read
 import org.whispersystems.signalservice.internal.push.SignalServiceProtos.SyncMessage.Request
 import org.whispersystems.signalservice.internal.push.SignalServiceProtos.SyncMessage.Sent
@@ -1147,6 +1149,8 @@ object SyncMessageProcessor {
     }
 
     SignalStore.storageService().setStorageKeyFromPrimary(StorageKey(storageKey.toByteArray()))
+
+    ApplicationDependencies.getJobManager().add(StorageSyncJob())
   }
 
   @Throws(IOException::class)
@@ -1161,60 +1165,6 @@ object SyncMessageProcessor {
     val attachment: SignalServiceAttachmentPointer = contactsMessage.blob.toSignalServiceAttachmentPointer()
 
     ApplicationDependencies.getJobManager().add(MultiDeviceContactSyncJob(attachment))
-  }
-
-  @Throws(IOException::class)
-  private fun handleSynchronizePniChangeNumber(pniChangeNumber: SyncMessage.PniChangeNumber, updatedPni: String?, envelopeTimestamp: Long) {
-    if (SignalStore.account().isLinkedDevice) {
-      log(envelopeTimestamp, "Primary device changed number. Synchronizing.")
-    } else {
-      log(envelopeTimestamp, "Primary device should not receive number change updates. Ignoring.")
-      return
-    }
-
-    if (!pniChangeNumber.hasIdentityKeyPair() || !pniChangeNumber.hasRegistrationId() || !pniChangeNumber.hasSignedPreKey() || updatedPni == null) {
-      warn(envelopeTimestamp, "Incomplete synchronize PNI number message. Ignoring.")
-      return
-    }
-
-    try {
-      val signedPreKey = SignedPreKeyRecord(pniChangeNumber.signedPreKey.toByteArray())
-
-      val pniProtocolStore = ApplicationDependencies.getProtocolStore().pni()
-      val pniMetadataStore = SignalStore.account().pniPreKeys
-
-      SignalStore.account().setPni(PNI.parseOrThrow(updatedPni))
-      SignalStore.account().pniRegistrationId = pniChangeNumber.registrationId
-      SignalStore.account().setPniIdentityKeyAfterChangeNumber(IdentityKeyPair(pniChangeNumber.identityKeyPair.toByteArray()))
-
-      pniProtocolStore.storeSignedPreKey(signedPreKey.id, signedPreKey)
-      val oneTimePreKeys = PreKeyUtil.generateAndStoreOneTimeEcPreKeys(pniProtocolStore, pniMetadataStore)
-
-      pniMetadataStore.activeSignedPreKeyId = signedPreKey.id
-      ApplicationDependencies.getSignalServiceAccountManager().setPreKeys(PreKeyUpload(ServiceIdType.PNI, pniProtocolStore.identityKeyPair.publicKey, signedPreKey, oneTimePreKeys, null, null))
-      pniMetadataStore.isSignedPreKeyRegistered = true
-
-      pniProtocolStore.identities().saveIdentityWithoutSideEffects(
-        Recipient.self().id,
-        Recipient.self().serviceId.get(),
-        pniProtocolStore.identityKeyPair.publicKey,
-        IdentityTable.VerifiedStatus.VERIFIED,
-        true,
-        System.currentTimeMillis(),
-        true
-      )
-    } catch (e: InvalidMessageException) {
-      warn(envelopeTimestamp, "Invalid signed prekey received while synchronize number change", e)
-      throw IOException(e)
-    }
-
-    SignalStore.misc().setPniInitializedDevices(true)
-    ApplicationDependencies.getGroupsV2Authorization().clear()
-
-    ApplicationDependencies.closeConnections()
-    ApplicationDependencies.getIncomingMessageObserver()
-
-    ApplicationDependencies.getJobManager().add(RotateCertificateJob())
   }
 
   private fun handleSynchronizeCallEvent(callEvent: SyncMessage.CallEvent, envelopeTimestamp: Long) {
@@ -1384,5 +1334,68 @@ object SyncMessageProcessor {
         else -> warn("Unsupported event type " + event + ". Ignoring. timestamp: " + timestamp + " type: " + type + " direction: " + direction + " event: " + event + " hasPeer: " + callEvent.hasConversationId())
       }
     }
+  }
+
+  private fun handleSynchronizePniChangeNumber(pniChangeNumber: PniChangeNumber, updatedPni: String?, envelopeTimestamp: Long) {
+    if (SignalStore.account().isLinkedDevice) {
+      log(envelopeTimestamp, "Primary device changed number. Synchronizing.")
+    } else {
+      log(envelopeTimestamp, "Primary device should not receive number change updates. Ignoring.")
+      return
+    }
+
+    if (!pniChangeNumber.hasIdentityKeyPair() || !pniChangeNumber.hasRegistrationId() || !pniChangeNumber.hasSignedPreKey() || updatedPni == null) {
+      warn(envelopeTimestamp, "Incomplete synchronize PNI number message. Ignoring.")
+      return
+    }
+
+    try {
+      val signedPreKey = SignedPreKeyRecord(pniChangeNumber.signedPreKey.toByteArray())
+      val pni = PNI.parseOrThrow(updatedPni)
+
+      val pniProtocolStore = ApplicationDependencies.getProtocolStore().pni()
+      val pniMetadataStore = SignalStore.account().pniPreKeys
+
+      SignalStore.account().setPni(pni)
+      SignalStore.account().pniRegistrationId = pniChangeNumber.registrationId
+      SignalStore.account().setPniIdentityKeyAfterChangeNumber(IdentityKeyPair(pniChangeNumber.identityKeyPair.toByteArray()))
+
+      pniProtocolStore.storeSignedPreKey(signedPreKey.id, signedPreKey)
+      val oneTimePreKeys = PreKeyUtil.generateAndStoreOneTimeEcPreKeys(pniProtocolStore, pniMetadataStore)
+
+      pniMetadataStore.activeSignedPreKeyId = signedPreKey.id
+      ApplicationDependencies.getSignalServiceAccountManager().setPreKeys(
+        PreKeyUpload(
+          serviceIdType = ServiceIdType.PNI,
+          identityKey = pniProtocolStore.identityKeyPair.publicKey,
+          signedPreKey = signedPreKey,
+          oneTimeEcPreKeys = oneTimePreKeys,
+          lastResortKyberPreKey = null,
+          oneTimeKyberPreKeys = null
+        )
+      )
+      pniMetadataStore.isSignedPreKeyRegistered = true
+
+      pniProtocolStore.identities().saveIdentityWithoutSideEffects(
+        Recipient.self().id,
+        pni,
+        pniProtocolStore.identityKeyPair.publicKey,
+        IdentityTable.VerifiedStatus.VERIFIED,
+        true,
+        System.currentTimeMillis(),
+        true
+      )
+
+      SignalStore.misc().setPniInitializedDevices(true)
+      ApplicationDependencies.getGroupsV2Authorization().clear()
+    } catch (e: InvalidMessageException) {
+      warn(envelopeTimestamp, "Invalid signed prekey received while synchronize number change", e)
+      return
+    }
+
+    ApplicationDependencies.closeConnections()
+    ApplicationDependencies.getIncomingMessageObserver()
+
+    ApplicationDependencies.getJobManager().add(RotateCertificateJob())
   }
 }
